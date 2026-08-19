@@ -1,0 +1,2 @@
+This is the working code to run the thermal camera 
+it will send the temperatures to the com port and use the python script 
