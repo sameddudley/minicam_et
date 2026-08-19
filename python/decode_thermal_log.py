@@ -6,6 +6,13 @@ Decodes thermal_log.bin (written by thermal_sensing_et.ino) into either:
     plus a matching timestamps array - the better choice for anything
     image-like: plotting, video, CNNs, etc.
 
+# CHANGED: this version matches the RTC-based sketch, where each record's
+# timestamp is a 4-byte Unix epoch second (real date/time) + a 2-byte
+# sub-second ms offset, instead of the old single 4-byte "ms since boot".
+# Decoded timestamps are now real epoch milliseconds (int64), not boot-relative.
+# If you still have older .bin files recorded BEFORE the RTC was added, set
+# LEGACY_BOOT_MS_FORMAT = True below to decode those instead.
+
 The MLX90640 is a 32 (wide) x 24 (tall) sensor. Pixel index i in the flat
 array maps to row = i // 32, col = i % 32 (row-major). Whether "row 0" is
 physically the top or bottom of the sensor as mounted depends on your
@@ -29,6 +36,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+from datetime import datetime, timezone  # CHANGED: for formatting real timestamps in the animation title
 
 
 HEADER_FMT = "<IHH"          # magic(uint32), numPixels(uint16), scale(uint16)
@@ -40,21 +48,26 @@ DEFAULT_SCALE = 100
 SENSOR_WIDTH = 32
 SENSOR_HEIGHT = 24
 
+# CHANGED: set this True only if decoding a .bin recorded with the OLD
+# (pre-RTC) sketch, where the timestamp was a single 4-byte "ms since boot".
+LEGACY_BOOT_MS_FORMAT = False
+
 
 in_path = r"D:\thermal_log.bin"
-out_path = r"C:\Users\samed\OneDrive\Documents\postdoc\code\thermal_camera_project\data_output\breadboard_test.npz"
+out_path = r"D:\rtc_test.npz"
 
 # ----- Settings you may need to change for visualization and saving video -----
 NPZ_PATH = r"D:\thermal_log.npz" # Path to the decoded .npz file
 FPS = 10                           # Playback speed (matches the 1 Hz capture rate)
 SAVE_VIDEO = True                # Set True to save a file instead of/in addition to displaying
-SAVE_PATH = r"C:\Users\samed\OneDrive\Documents\postdoc\code\thermal_camera_project\data_output\breadboard_test.gif"  # Use .mp4 (needs ffmpeg) or .gif (no extra install)
+SAVE_PATH = r"D:\rtc_test.gif"  # Use .mp4 (needs ffmpeg) or .gif (no extra install)
 # ---------------------------------------------
 
 
 
 def decode(bin_path):
-    """Returns (timestamps: np.ndarray[int64], pixels: np.ndarray[float32, shape=(N, num_pixels)])"""
+    """Returns (timestamps: np.ndarray[int64] (epoch ms, or boot ms if LEGACY_BOOT_MS_FORMAT),
+    pixels: np.ndarray[float32, shape=(N, num_pixels)])"""
     with open(bin_path, "rb") as f:
         data = f.read()
 
@@ -72,15 +85,25 @@ def decode(bin_path):
               "card wasn't fully seated when the header would have been "
               "written; the frame data itself is unaffected.")
 
-    record_fmt = f"<I{num_pixels}h"   # timestamp(uint32) + N x int16
+    # CHANGED: new format is uint32 epoch_s + uint16 ms_offset + N x int16 pixels.
+    # (old format was just uint32 ms_since_boot + N x int16 pixels.)
+    if LEGACY_BOOT_MS_FORMAT:
+        record_fmt = f"<I{num_pixels}h"   # ms_since_boot(uint32) + N x int16
+    else:
+        record_fmt = f"<IH{num_pixels}h"  # epoch_s(uint32) + ms_offset(uint16) + N x int16
     record_size = struct.calcsize(record_fmt)
 
     timestamps = []
     pixel_rows = []
     while offset + record_size <= len(data):
         values = struct.unpack_from(record_fmt, data, offset)
-        timestamps.append(values[0])
-        pixel_rows.append([v / scale for v in values[1:]])
+        if LEGACY_BOOT_MS_FORMAT:
+            timestamps.append(values[0])           # ms since boot, as before
+            pixel_rows.append([v / scale for v in values[1:]])
+        else:
+            epoch_s, ms_offset = values[0], values[1]
+            timestamps.append(epoch_s * 1000 + ms_offset)  # CHANGED: combined into real epoch ms
+            pixel_rows.append([v / scale for v in values[2:]])
         offset += record_size
 
     leftover = len(data) - offset
@@ -92,7 +115,10 @@ def decode(bin_path):
 
 
 def save_csv(timestamps, pixels, out_path):
-    columns = ["timestamp_ms"] + [f"px{i}" for i in range(pixels.shape[1])]
+    # CHANGED: column renamed from "timestamp_ms" (boot-relative) to
+    # "timestamp_epoch_ms" (real Unix time in ms) to match the new format.
+    ts_column = "timestamp_ms" if LEGACY_BOOT_MS_FORMAT else "timestamp_epoch_ms"
+    columns = [ts_column] + [f"px{i}" for i in range(pixels.shape[1])]
     df = pd.DataFrame(np.column_stack([timestamps, pixels]), columns=columns)
     df.to_csv(out_path, index=False)
 
@@ -140,7 +166,17 @@ def animate_thermograms(frames, timestamps):
 
     def update(i):
         img.set_data(frames[i])
-        title.set_text(f"Frame {i + 1}/{len(frames)}   {timestamps[i]} ms")
+        # CHANGED: timestamps are now real epoch ms, so format them as an
+        # actual date/time instead of showing a raw "N ms" boot-relative number.
+        if LEGACY_BOOT_MS_FORMAT:
+            ts_label = f"{timestamps[i]} ms"
+        else:
+            # Note: this is whatever timezone your computer was in when you set
+            # the RTC (via __DATE__/__TIME__), not true UTC - the RTC has no
+            # timezone awareness of its own, it just stores whatever it was given.
+            dt = datetime.fromtimestamp(timestamps[i] / 1000, tz=timezone.utc)
+            ts_label = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        title.set_text(f"Frame {i + 1}/{len(frames)}   {ts_label}")
         return img, title
 
     anim = animation.FuncAnimation(

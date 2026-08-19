@@ -30,6 +30,7 @@
 #include <SPI.h>
 #include <SD.h>
 #include <DHT.h>
+#include <RTClib.h>
 
 #include "MLX90640_API.h"
 #include "MLX90640_I2C_Driver.h"
@@ -57,9 +58,17 @@ typedef struct __attribute__((packed)) {
 } FileHeader;
 
 typedef struct __attribute__((packed)) {
-  uint32_t timestamp_ms;
+  uint32_t timestamp_epoch_s; //Unix epoch seconds, from the RTC (falls back to seconds-since-boot if no RTC is found)
+  uint16_t timestamp_ms;      //milliseconds within that second (0-999), for sub-second frame timing
   int16_t pixels[768];
 } FrameRecord;
+
+// ---- RTC (DS3231, shares the I2C bus with the MLX90640 - no extra pins needed) ----
+RTC_DS3231 rtc;
+bool rtcReady = false;
+uint32_t rtcSyncEpochS = 0;     //epoch seconds captured at rtcSyncMillis
+unsigned long rtcSyncMillis = 0;
+const unsigned long RTC_RESYNC_INTERVAL_MS = 3600000UL; //resync hourly: corrects drift and avoids millis() rollover issues
 
 // ---- DHT11 Temperature/Humidity ----
 #define DHT_PIN 4
@@ -119,10 +128,40 @@ void setup()
 
   //---- Initialize DHT11 ----
   dht.begin();
+
+  //---- Initialize RTC ----
+  if (rtc.begin())
+  {
+    rtcReady = true;
+    if (rtc.lostPower())
+    {
+      //Only true on first power-up or after the backup battery has been out -
+      //safe to set from compile time here without overwriting a good clock.
+      Serial.println("RTC lost power - setting to compile time. Recompile/upload right before deploying so this is accurate, or set it manually afterward.");
+      rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    }
+    syncRtcTime();
+    Serial.println("RTC initialized.");
+  }
+  else
+  {
+    rtcReady = false;
+    Serial.println("RTC not found - timestamps will fall back to seconds-since-boot.");
+  }
 }
 
 void loop()
 {
+  //Periodically resync to the RTC to correct for millis() drift/rollover
+  if (rtcReady && (millis() - rtcSyncMillis > RTC_RESYNC_INTERVAL_MS))
+  {
+    syncRtcTime();
+  }
+
+  uint32_t frameEpochSec;
+  uint16_t frameMsOffset;
+  getTimestamp(frameEpochSec, frameMsOffset);
+
   long startTime = millis();
   for (byte x = 0 ; x < 2 ; x++)
   {
@@ -149,7 +188,7 @@ void loop()
 
   if (sdReady)
   {
-    if (!logFrameToSD(startTime))
+    if (!logFrameToSD(frameEpochSec, frameMsOffset))
     {
       //Write failed mid-run - most likely the card was just pulled. Drop out of
       //"ready" state; we'll retry on the next throttled attempt above.
@@ -173,7 +212,11 @@ void loop()
     }
     else if (sdReady)
     {
-      if (!logDhtToSD(lastDhtReadMs, tempC, humidity))
+      uint32_t dhtEpochSec;
+      uint16_t dhtMsOffset;
+      getTimestamp(dhtEpochSec, dhtMsOffset);
+
+      if (!logDhtToSD(dhtEpochSec, dhtMsOffset, tempC, humidity))
       {
         sdReady = false;
         Serial.println("SD write failed (card removed?). Will retry.");
@@ -181,6 +224,34 @@ void loop()
     }
     //else: no card present - reading is dropped, will resume once the card returns
   }
+}
+
+//Captures the RTC's current time as a reference point; getTimestamp() extrapolates
+//from this using millis() between resyncs.
+void syncRtcTime()
+{
+  if (!rtcReady) return;
+  DateTime now = rtc.now();
+  rtcSyncEpochS = now.unixtime();
+  rtcSyncMillis = millis();
+}
+
+//Returns the current real time as epoch seconds + sub-second ms offset (0-999),
+//smoothly extrapolated from the last RTC sync using millis(). Falls back to
+//seconds-since-boot if no RTC was found, so the file format stays consistent
+//either way (just without a meaningful absolute date).
+void getTimestamp(uint32_t &epochSec, uint16_t &msOffset)
+{
+  if (!rtcReady)
+  {
+    epochSec = millis() / 1000;
+    msOffset = millis() % 1000;
+    return;
+  }
+  unsigned long elapsedMs = millis() - rtcSyncMillis; //unsigned subtraction handles millis() rollover safely
+  uint64_t epochMs = (uint64_t)rtcSyncEpochS * 1000ULL + elapsedMs;
+  epochSec = (uint32_t)(epochMs / 1000ULL);
+  msOffset = (uint16_t)(epochMs % 1000ULL);
 }
 
 //(Re)mounts the SD card and ensures the log file exists with a valid header.
@@ -209,7 +280,7 @@ bool initSD()
     File dhtFile = SD.open(DHT_LOG_FILENAME, FILE_WRITE);
     if (!dhtFile)
       return false;
-    dhtFile.println("timestamp_ms,temperature_C,humidity_pct");
+    dhtFile.println("datetime,temperature_C,humidity_pct");
     dhtFile.close();
   }
 
@@ -218,11 +289,12 @@ bool initSD()
 
 //Appends one binary FrameRecord (timestamp + 768 fixed-point pixel values) to the SD card log file.
 //Returns true on success, false if the write failed (e.g. card was removed).
-bool logFrameToSD(unsigned long timestamp)
+bool logFrameToSD(uint32_t epochSec, uint16_t msOffset)
 {
   static FrameRecord record; //static so it isn't re-allocated on the stack every call
 
-  record.timestamp_ms = (uint32_t)timestamp;
+  record.timestamp_epoch_s = epochSec;
+  record.timestamp_ms = msOffset;
   for (int x = 0 ; x < 768 ; x++)
   {
     record.pixels[x] = floatToFixed(mlx90640To[x]);
@@ -240,9 +312,9 @@ bool logFrameToSD(unsigned long timestamp)
   return written == sizeof(record);
 }
 
-//Appends one CSV row (timestamp, temperature, humidity) to the DHT11 log file.
+//Appends one CSV row (date-time, temperature, humidity) to the DHT11 log file.
 //Returns true on success, false if the write failed (e.g. card was removed).
-bool logDhtToSD(unsigned long timestamp, float tempC, float humidity)
+bool logDhtToSD(uint32_t epochSec, uint16_t msOffset, float tempC, float humidity)
 {
   File dhtFile = SD.open(DHT_LOG_FILENAME, FILE_APPEND);
   if (!dhtFile)
@@ -250,7 +322,13 @@ bool logDhtToSD(unsigned long timestamp, float tempC, float humidity)
     return false;
   }
 
-  dhtFile.print(timestamp);
+  char buf[] = "YYYY-MM-DD hh:mm:ss";
+  DateTime dt(epochSec); //works even in RTC-fallback mode, just won't be a meaningful calendar date then
+  dhtFile.print(dt.toString(buf));
+  dhtFile.print(".");
+  char msBuf[4];
+  sprintf(msBuf, "%03u", msOffset);
+  dhtFile.print(msBuf);
   dhtFile.print(",");
   dhtFile.print(tempC, 1);
   dhtFile.print(",");
