@@ -26,6 +26,21 @@
   Open the serial monitor at 115200 baud to see the output
 */
 
+#include <WiFi.h>
+#include <ArduinoOTA.h>
+
+// ---- Wi-Fi Configuration ----
+const char *AP_SSID = "Minicam_et";
+const char *AP_PASS = "thermalcamera"; // Must be at least 8 characters
+
+// How long to listen for wireless code updates on boot (in milliseconds)
+const unsigned long OTA_WINDOW_MS =60000; 
+bool otaInProgress = false;
+
+
+
+
+
 #include <Wire.h>
 #include <SPI.h>
 #include <SD.h>
@@ -102,6 +117,55 @@ void setup()
   //while (!Serial); //Wait for user to open terminal
   //Serial.println("MLX90640 IR Array Example");
 
+
+
+
+
+  // ---- Startup Access Point & OTA Window ----
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(AP_SSID, AP_PASS);
+
+  Serial.println("\nAccess Point Started!");
+  Serial.print("Network Name: "); Serial.println(AP_SSID);
+  Serial.print("IP Address: ");   Serial.println(WiFi.softAPIP()); // Default: 192.168.4.1
+
+  ArduinoOTA.setHostname("esp32-thermal-logger");
+
+  ArduinoOTA.onStart([]() {
+    otaInProgress = true;
+    Serial.println("OTA Update Started - Do not power off!");
+  });
+  ArduinoOTA.onEnd([]() { Serial.println("\nOTA Update Complete!"); });
+  ArduinoOTA.onError([](ota_error_t error) { Serial.printf("OTA Error[%u]\n", error); });
+
+  ArduinoOTA.begin();
+
+  Serial.printf("Listening for OTA upload for %lu seconds...\n", OTA_WINDOW_MS / 1000);
+  unsigned long otaStartMs = millis();
+
+  // Listen during the window OR until upload finishes
+  while ((millis() - otaStartMs < OTA_WINDOW_MS) || (WiFi.softAPgetStationNum() > 0) || otaInProgress) {
+    ArduinoOTA.handle();
+
+    // Reset the 20-second timer as long as your computer is actively connected
+    if (WiFi.softAPgetStationNum() > 0) {
+      otaStartMs = millis(); 
+      Serial.println("Still connected to WiFi, waiting for disconnect and starting logging");
+    }
+
+
+    delay(1000);
+  }
+
+  // Turn off Access Point to save battery
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  Serial.println("Wi-Fi powered OFF. Proceeding to offline logging.");
+
+
+
+
+  // check if MLX90640 is connected
   if (isConnected() == false)
   {
     Serial.println("MLX90640 not detected at default I2C address. Please check wiring. Freezing.");
