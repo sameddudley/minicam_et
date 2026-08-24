@@ -86,6 +86,12 @@ bool sdReady = false;
 unsigned long lastSdAttemptMs = 0;
 const unsigned long SD_RETRY_INTERVAL_MS = 2000; //don't hammer the SPI bus every loop while the card is out
 
+// ---- Serial CSV streaming (for live alignment checks with the Python visualizer) ----
+// WARNING: enabling this drops your effective frame rate well below 4Hz - printing
+// 768 values over serial takes ~0.4-0.5s at 115200 baud, longer than a capture cycle.
+// Fine for a quick "is it pointed the right way" check; leave false for real data runs.
+bool STREAM_TO_SERIAL = false;
+
 void setup()
 {
   Wire.begin();
@@ -93,7 +99,7 @@ void setup()
 
   Serial.begin(115200); //Fast serial as possible
   
-  while (!Serial); //Wait for user to open terminal
+  //while (!Serial); //Wait for user to open terminal
   //Serial.println("MLX90640 IR Array Example");
 
   if (isConnected() == false)
@@ -116,7 +122,7 @@ void setup()
   //Once params are extracted, we can release eeMLX90640 array
 
   //MLX90640_SetRefreshRate(MLX90640_address, 0x02); //Set rate to 2Hz
-  MLX90640_SetRefreshRate(MLX90640_address, 0x03); //Set rate to 4Hz
+  MLX90640_SetRefreshRate(MLX90640_address, 0x01); //Set rate to 1Hz
   //MLX90640_SetRefreshRate(MLX90640_address, 0x07); //Set rate to 64Hz
 
   //---- Initialize SD card (non-fatal: keep sampling even if no card yet) ----
@@ -137,11 +143,11 @@ void setup()
     {
       //Only true on first power-up or after the backup battery has been out -
       //safe to set from compile time here without overwriting a good clock.
-      Serial.println("RTC lost power - setting to compile time. Recompile/upload right before deploying so this is accurate, or set it manually afterward.");
+      Serial.println("RTC lost power - setting to compile time. Recompile/upload right before this happens for it to be accurate, or correct it afterward by typing SETTIME into the Serial Monitor.");
       rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
     }
     syncRtcTime();
-    Serial.println("RTC initialized.");
+    Serial.println("RTC initialized. Type SETTIME into the Serial Monitor (right after a fresh compile+upload) to manually correct the clock at any time.");
   }
   else
   {
@@ -152,6 +158,8 @@ void setup()
 
 void loop()
 {
+  handleSerialCommands();
+
   //Periodically resync to the RTC to correct for millis() drift/rollover
   if (rtcReady && (millis() - rtcSyncMillis > RTC_RESYNC_INTERVAL_MS))
   {
@@ -177,6 +185,17 @@ void loop()
     MLX90640_CalculateTo(mlx90640Frame, &mlx90640, emissivity, tr, mlx90640To);
   }
   long stopTime = millis();
+
+  //---- Optional: stream raw CSV to Serial for live alignment/pointing checks ----
+  if (STREAM_TO_SERIAL)
+  {
+    for (int x = 0 ; x < 768 ; x++)
+    {
+      Serial.print(mlx90640To[x], 2);
+      Serial.print(",");
+    }
+    Serial.println();
+  }
 
   //If we don't currently have a working card, retry (throttled) rather than every loop
   if (!sdReady && (millis() - lastSdAttemptMs > SD_RETRY_INTERVAL_MS))
@@ -223,6 +242,60 @@ void loop()
       }
     }
     //else: no card present - reading is dropped, will resume once the card returns
+  }
+}
+
+//USAGE
+//Type a command into the serial monitor to manually set time following the next format
+//EXAMPLE:
+//SETTIME 2026,08,21,10,12,00
+//corresponds to following August 21, 2026, 10:12:00 AM (uses 24 hour time)
+//Press enter when an accurate clock reaches exactly the time you set
+void handleSerialCommands()
+{
+  if (!Serial.available()) return;
+
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+
+  // New logic: Check if the user is sending a specific time
+  // Format expected: SETTIME YYYY,MM,DD,HH,MM,SS
+  if (cmd.startsWith("SETTIME "))
+  {
+    if (!rtcReady)
+    {
+      Serial.println("No RTC detected - can't set time.");
+      return;
+    }
+    
+    int y, m, d, h, min, s;
+    // Parse the numbers out of the command string
+    if (sscanf(cmd.c_str(), "SETTIME %d,%d,%d,%d,%d,%d", &y, &m, &d, &h, &min, &s) == 6) 
+    {
+      rtc.adjust(DateTime(y, m, d, h, min, s));
+      syncRtcTime();
+      Serial.print("RTC manually set to exact time: ");
+      Serial.printf("%04d-%02d-%02d %02d:%02d:%02d\n", y, m, d, h, min, s);
+    }
+    else
+    {
+      Serial.println("Invalid format. Use: SETTIME YYYY,MM,DD,HH,MM,SS");
+    }
+  }
+  // Fallback: keep the old behavior just in case you type "SETTIME" with no numbers
+  else if (cmd.equalsIgnoreCase("SETTIME"))
+  {
+    if (!rtcReady)
+    {
+      Serial.println("No RTC detected - can't set time.");
+      return;
+    }
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    syncRtcTime();
+    Serial.print("RTC manually set to compile time: ");
+    Serial.print(F(__DATE__));
+    Serial.print(" ");
+    Serial.println(F(__TIME__));
   }
 }
 

@@ -4,8 +4,7 @@ MLX90640 Thermal Camera Visualizer
 Reads comma-separated temperature values (768 per line, one line per frame)
 from the ESP32 over serial and displays them as a live heatmap.
 
-Pairs with the Arduino sketch based on Example2_OutputToProcessing.ino,
-printing all 768 pixel values as CSV once per frame.
+Requires the sketch's STREAM_TO_SERIAL flag set to true (and re-uploaded).
 
 Install dependencies first:
     pip install pyserial matplotlib numpy
@@ -39,19 +38,26 @@ def main():
     print(f"Connected to {SERIAL_PORT} at {BAUD_RATE} baud. Waiting for data...")
 
     # Dictionary that holds every captured frame, keyed by timestamp.
-    # frames["2026-08-13 10:15:32.104"] -> 24x32 numpy array of temperatures (C)
     frames = {}
 
     # Set up the plot
     plt.ion()
     fig, ax = plt.subplots()
     dummy = np.zeros((FRAME_HEIGHT, FRAME_WIDTH))
-    img = ax.imshow(dummy, cmap="inferno", interpolation= None)
+    img = ax.imshow(dummy, cmap="inferno", interpolation=None)
     cbar = fig.colorbar(img, ax=ax, label="Temperature (C)")
-    ax.set_title("MLX90640 Thermal View")
+    ax.set_title("MLX90640 Thermal View - waiting for data...")
+    plt.show(block=False)
 
     try:
         while True:
+            # CHANGED: pump GUI events every loop iteration, not just when a
+            # frame is successfully plotted. Without this, any gap in valid
+            # data (wrong baud, STREAM_TO_SERIAL off, a malformed line, the
+            # readline timeout) starves the window's event loop and it gets
+            # flagged "Not Responding" - which looks like a freeze but isn't.
+            plt.pause(0.001)
+
             line = ser.readline().decode("utf-8", errors="ignore").strip()
             if not line:
                 continue  # timed out waiting, try again
@@ -83,8 +89,10 @@ def main():
             img.set_data(frame)
             img.set_clim(vmin=frame.min(), vmax=frame.max())  # auto-scale color range each frame
             ax.set_title(f"MLX90640 Thermal View  (min {frame.min():.1f}C / max {frame.max():.1f}C)")
-            fig.canvas.draw()
-            fig.canvas.flush_events()
+            # CHANGED: plt.pause() instead of draw()+flush_events() - more
+            # reliably pumps the GUI event loop across different matplotlib
+            # backends (Tk, Qt, etc.), which is a common source of freezing.
+            plt.pause(0.001)
 
     except KeyboardInterrupt:
         print("Stopped by user.")

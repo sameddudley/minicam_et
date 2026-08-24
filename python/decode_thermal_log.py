@@ -58,7 +58,7 @@ out_path = r"D:\rtc_test.npz"
 
 # ----- Settings you may need to change for visualization and saving video -----
 NPZ_PATH = r"D:\thermal_log.npz" # Path to the decoded .npz file
-FPS = 10                           # Playback speed (matches the 1 Hz capture rate)
+FPS = 3                          # Playback speed (matches the 1 Hz capture rate)
 SAVE_VIDEO = True                # Set True to save a file instead of/in addition to displaying
 SAVE_PATH = r"D:\rtc_test.gif"  # Use .mp4 (needs ffmpeg) or .gif (no extra install)
 # ---------------------------------------------
@@ -156,7 +156,7 @@ def animate_thermograms(frames, timestamps):
 
 
     fig, ax = plt.subplots()
-    img = ax.imshow(frames[0], cmap="inferno", interpolation="bicubic", vmin=vmin, vmax=vmax)
+    img = ax.imshow(frames[0], cmap="inferno", interpolation= None, vmin=vmin, vmax=vmax)
 
 
     fig.colorbar(img, ax=ax, label="Temperature (C)")
