@@ -240,10 +240,7 @@ void setup()
 void loop()
 {
 
-  uint32_t frameEpochSec;
-  uint16_t frameMsOffset;
-
-  getTimestamp(frameEpochSec, frameMsOffset);
+  
 
 
   long startTime = millis();
@@ -262,9 +259,12 @@ void loop()
   }
   long stopTime = millis();
 
+  uint32_t frameEpochSec;
+  uint16_t frameMsOffset;
+
+  getTimestamp(frameEpochSec, frameMsOffset);
+
   
-
-
 
   //If we don't currently have a working card, retry (throttled) rather than every loop
   if (!sdReady && (millis() - lastSdAttemptMs > SD_RETRY_INTERVAL_MS))
