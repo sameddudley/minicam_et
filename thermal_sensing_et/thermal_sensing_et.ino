@@ -65,12 +65,18 @@ const byte MLX90640_address = 0x33; //Default 7-bit unshifted address of the MLX
 #define SD_CS_PIN 5
 const char *LOG_FILENAME = "/thermal_log.bin";
 
+
+
+
 // ---- Fixed-point encoding ----
 // Store each temperature as (float * TEMP_SCALE) rounded to the nearest int16_t.
 // TEMP_SCALE=100 gives 0.01C resolution (rounding error <= 0.005C), well inside
 // your +-0.1C budget, across the full -327.67C to 327.67C range of an int16_t.
 #define TEMP_SCALE 100
 #define FILE_MAGIC 0x54484D31UL //"THM1" - lets a decoder confirm the format/scale
+
+
+
 
 //Binary layout: one 8-byte file header, then one FrameRecord per sample.
 typedef struct __attribute__((packed)) {
@@ -85,12 +91,13 @@ typedef struct __attribute__((packed)) {
   int16_t pixels[768];
 } FrameRecord;
 
+
+
 // ---- RTC (DS3231, shares the I2C bus with the MLX90640 - no extra pins needed) ----
 RTC_DS3231 rtc;
 bool rtcReady = false;
-uint32_t rtcSyncEpochS = 0;     //epoch seconds captured at rtcSyncMillis
-unsigned long rtcSyncMillis = 0;
-const unsigned long RTC_RESYNC_INTERVAL_MS = 3600000UL; //resync hourly: corrects drift and avoids millis() rollover issues
+
+
 
 // ---- DHT11 Temperature/Humidity ----
 #define DHT_PIN 4
@@ -108,11 +115,7 @@ bool sdReady = false;
 unsigned long lastSdAttemptMs = 0;
 const unsigned long SD_RETRY_INTERVAL_MS = 2000; //don't hammer the SPI bus every loop while the card is out
 
-// ---- Serial CSV streaming (for live alignment checks with the Python visualizer) ----
-// WARNING: enabling this drops your effective frame rate well below 4Hz - printing
-// 768 values over serial takes ~0.4-0.5s at 115200 baud, longer than a capture cycle.
-// Fine for a quick "is it pointed the right way" check; leave false for real data runs.
-bool STREAM_TO_SERIAL = false;
+
 
 void setup()
 {
@@ -123,8 +126,6 @@ void setup()
   
   //while (!Serial); //Wait for user to open terminal
   //Serial.println("MLX90640 IR Array Example");
-
-
 
 
 
@@ -192,9 +193,11 @@ void setup()
 
   //Once params are extracted, we can release eeMLX90640 array
 
-  //MLX90640_SetRefreshRate(MLX90640_address, 0x02); //Set rate to 2Hz
-  MLX90640_SetRefreshRate(MLX90640_address, 0x01); //Set rate to 1Hz
-  //MLX90640_SetRefreshRate(MLX90640_address, 0x07); //Set rate to 64Hz
+
+  MLX90640_I2CWrite(0x33, 0x800D, 6401); // writes the value 1901 (HEX) = 6401 (DEC) in the register at position 0x800D to enable reading out the temperatures!!!
+
+  //Set refresh rate
+  MLX90640_SetRefreshRate(MLX90640_address, 0x2); //Set capture rate to 1Hz, needs to capture 2 times for one second, so we have a 2 here to get one frame per second
 
   //---- Initialize SD card (non-fatal: keep sampling even if no card yet) ----
   sdReady = initSD();
@@ -203,8 +206,12 @@ void setup()
   else
     Serial.println("No SD card detected. Will keep sampling and retry periodically; insert a card any time.");
 
+
+
   //---- Initialize DHT11 ----
   dht.begin();
+
+
 
   //---- Initialize RTC ----
   if (rtc.begin())
@@ -217,8 +224,8 @@ void setup()
       Serial.println("RTC lost power - setting to compile time. Recompile/upload right before this happens for it to be accurate, or correct it afterward by typing SETTIME into the Serial Monitor.");
       rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
     }
-    syncRtcTime();
-    Serial.println("RTC initialized. Type SETTIME into the Serial Monitor (right after a fresh compile+upload) to manually correct the clock at any time.");
+
+    Serial.println("RTC initialized. run python script to reset clock to computer standard");
   }
   else
   {
@@ -227,19 +234,17 @@ void setup()
   }
 }
 
+
+
+
 void loop()
 {
-  handleSerialCommands();
-
-  //Periodically resync to the RTC to correct for millis() drift/rollover
-  if (rtcReady && (millis() - rtcSyncMillis > RTC_RESYNC_INTERVAL_MS))
-  {
-    syncRtcTime();
-  }
 
   uint32_t frameEpochSec;
   uint16_t frameMsOffset;
+
   getTimestamp(frameEpochSec, frameMsOffset);
+
 
   long startTime = millis();
   for (byte x = 0 ; x < 2 ; x++)
@@ -257,16 +262,9 @@ void loop()
   }
   long stopTime = millis();
 
-  //---- Optional: stream raw CSV to Serial for live alignment/pointing checks ----
-  if (STREAM_TO_SERIAL)
-  {
-    for (int x = 0 ; x < 768 ; x++)
-    {
-      Serial.print(mlx90640To[x], 2);
-      Serial.print(",");
-    }
-    Serial.println();
-  }
+  
+
+
 
   //If we don't currently have a working card, retry (throttled) rather than every loop
   if (!sdReady && (millis() - lastSdAttemptMs > SD_RETRY_INTERVAL_MS))
@@ -316,74 +314,9 @@ void loop()
   }
 }
 
-//USAGE
-//Type a command into the serial monitor to manually set time following the next format
-//EXAMPLE:
-//SETTIME 2026,08,21,10,12,00
-//corresponds to following August 21, 2026, 10:12:00 AM (uses 24 hour time)
-//Press enter when an accurate clock reaches exactly the time you set
-void handleSerialCommands()
-{
-  if (!Serial.available()) return;
 
-  String cmd = Serial.readStringUntil('\n');
-  cmd.trim();
 
-  // New logic: Check if the user is sending a specific time
-  // Format expected: SETTIME YYYY,MM,DD,HH,MM,SS
-  if (cmd.startsWith("SETTIME "))
-  {
-    if (!rtcReady)
-    {
-      Serial.println("No RTC detected - can't set time.");
-      return;
-    }
-    
-    int y, m, d, h, min, s;
-    // Parse the numbers out of the command string
-    if (sscanf(cmd.c_str(), "SETTIME %d,%d,%d,%d,%d,%d", &y, &m, &d, &h, &min, &s) == 6) 
-    {
-      rtc.adjust(DateTime(y, m, d, h, min, s));
-      syncRtcTime();
-      Serial.print("RTC manually set to exact time: ");
-      Serial.printf("%04d-%02d-%02d %02d:%02d:%02d\n", y, m, d, h, min, s);
-    }
-    else
-    {
-      Serial.println("Invalid format. Use: SETTIME YYYY,MM,DD,HH,MM,SS");
-    }
-  }
-  // Fallback: keep the old behavior just in case you type "SETTIME" with no numbers
-  else if (cmd.equalsIgnoreCase("SETTIME"))
-  {
-    if (!rtcReady)
-    {
-      Serial.println("No RTC detected - can't set time.");
-      return;
-    }
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-    syncRtcTime();
-    Serial.print("RTC manually set to compile time: ");
-    Serial.print(F(__DATE__));
-    Serial.print(" ");
-    Serial.println(F(__TIME__));
-  }
-}
 
-//Captures the RTC's current time as a reference point; getTimestamp() extrapolates
-//from this using millis() between resyncs.
-void syncRtcTime()
-{
-  if (!rtcReady) return;
-  DateTime now = rtc.now();
-  rtcSyncEpochS = now.unixtime();
-  rtcSyncMillis = millis();
-}
-
-//Returns the current real time as epoch seconds + sub-second ms offset (0-999),
-//smoothly extrapolated from the last RTC sync using millis(). Falls back to
-//seconds-since-boot if no RTC was found, so the file format stays consistent
-//either way (just without a meaningful absolute date).
 void getTimestamp(uint32_t &epochSec, uint16_t &msOffset)
 {
   if (!rtcReady)
@@ -392,11 +325,14 @@ void getTimestamp(uint32_t &epochSec, uint16_t &msOffset)
     msOffset = millis() % 1000;
     return;
   }
-  unsigned long elapsedMs = millis() - rtcSyncMillis; //unsigned subtraction handles millis() rollover safely
-  uint64_t epochMs = (uint64_t)rtcSyncEpochS * 1000ULL + elapsedMs;
-  epochSec = (uint32_t)(epochMs / 1000ULL);
-  msOffset = (uint16_t)(epochMs % 1000ULL);
+  
+  DateTime now = rtc.now();
+  epochSec = now.unixtime();
+  msOffset = 0; // RTC doesn't track milliseconds
 }
+
+
+
 
 //(Re)mounts the SD card and ensures the log file exists with a valid header.
 //Safe to call repeatedly - SD.end() clears any stale state from a previous
