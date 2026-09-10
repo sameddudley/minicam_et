@@ -54,13 +54,14 @@ LEGACY_BOOT_MS_FORMAT = False
 
 
 in_path = r"D:\thermal_log.bin"
-out_path = r"D:\rtc_test.npz"
+out_path = r"C:\Users\samed\OneDrive\Documents\postdoc\minicam_et_data\newtest.npz"
+out_path_csv = r"C:\Users\samed\OneDrive\Documents\postdoc\minicam_et_data\newtest.csv"
 
 # ----- Settings you may need to change for visualization and saving video -----
-NPZ_PATH = r"D:\thermal_log.npz" # Path to the decoded .npz file
+NPZ_PATH = r"C:\Users\samed\OneDrive\Documents\postdoc\minicam_et_data\newtest.npz" # Path to the decoded .npz file
 FPS = 3                          # Playback speed (matches the 1 Hz capture rate)
 SAVE_VIDEO = True                # Set True to save a file instead of/in addition to displaying
-SAVE_PATH = r"D:\rtc_test.gif"  # Use .mp4 (needs ffmpeg) or .gif (no extra install)
+SAVE_PATH = r"C:\Users\samed\OneDrive\Documents\postdoc\minicam_et_data\newtest.gif"  # Use .mp4 (needs ffmpeg) or .gif (no extra install)
 # ---------------------------------------------
 
 
@@ -183,7 +184,7 @@ def animate_thermograms(frames, timestamps):
         fig,
         update,
         frames=len(frames),
-        interval=1000 / FPS,  # milliseconds between frames
+        interval=1 / FPS,  # milliseconds between frames
         blit=False,
         repeat=True,
     )
@@ -203,6 +204,7 @@ if __name__ == "__main__":
     thermogram_animation = animate_thermograms(frames, timestamps)
     save_animation(thermogram_animation)
     save_npz(timestamps, pixels, out_path)
+    save_csv(timestamps, pixels, out_path_csv)
 
 
     print(f"Decoded {len(timestamps)} frames -> {out_path}")

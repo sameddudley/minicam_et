@@ -1,3 +1,8 @@
+
+//TWO current issues
+//not logging 1hz
+//rtc module does not keep track of time while there is no power, also want to be able to set clock according to computer
+
 /*
   Output the temperature readings to all pixels to be read by a Processing visualizer
   By: Nathan Seidle
@@ -34,7 +39,9 @@ const char *AP_SSID = "Minicam_et";
 const char *AP_PASS = "thermalcamera"; // Must be at least 8 characters
 
 // How long to listen for wireless code updates on boot (in milliseconds)
-const unsigned long OTA_WINDOW_MS =60000; 
+//Currently window is 0, so there is no time to connect to wifi
+//change OTA_WINDOW_MS to a number greater than 0 to set setup window
+const unsigned long OTA_WINDOW_MS =0; 
 bool otaInProgress = false;
 
 
@@ -291,7 +298,7 @@ void loop()
 
     if (isnan(humidity) || isnan(tempC))
     {
-      Serial.println("DHT11 read failed (check wiring).");
+      //Serial.println("DHT11 read failed (check wiring).");
     }
     else if (sdReady)
     {
