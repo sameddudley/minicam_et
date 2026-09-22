@@ -51,17 +51,18 @@ SENSOR_HEIGHT = 24
 # CHANGED: set this True only if decoding a .bin recorded with the OLD
 # (pre-RTC) sketch, where the timestamp was a single 4-byte "ms since boot".
 LEGACY_BOOT_MS_FORMAT = False
+path_prefix = r'C:\Users\samed\OneDrive\Documents\postdoc\barrelli\FOV_experiment\minicam_et\station_3/'
 
 
-in_path = r"D:\thermal_log.bin"
-out_path = r"C:\Users\samed\OneDrive\Documents\postdoc\minicam_et_data\newtest.npz"
-out_path_csv = r"C:\Users\samed\OneDrive\Documents\postdoc\minicam_et_data\newtest.csv"
+in_path = path_prefix + "thermal_log.bin"
+out_path = path_prefix + "station_3.npz"
+out_path_csv = path_prefix + "station_3.csv"
 
 # ----- Settings you may need to change for visualization and saving video -----
-NPZ_PATH = r"C:\Users\samed\OneDrive\Documents\postdoc\minicam_et_data\newtest.npz" # Path to the decoded .npz file
+NPZ_PATH = path_prefix + "station_3.npz" # Path to the decoded .npz file
 FPS = 3                          # Playback speed (matches the 1 Hz capture rate)
-SAVE_VIDEO = True                # Set True to save a file instead of/in addition to displaying
-SAVE_PATH = r"C:\Users\samed\OneDrive\Documents\postdoc\minicam_et_data\newtest.gif"  # Use .mp4 (needs ffmpeg) or .gif (no extra install)
+SAVE_VIDEO = False                # Set True to save a file instead of/in addition to displaying
+SAVE_PATH = path_prefix + "station_3.gif"  # Use .mp4 (needs ffmpeg) or .gif (no extra install)
 # ---------------------------------------------
 
 
@@ -201,10 +202,10 @@ if __name__ == "__main__":
     timestamps, pixels = decode(in_path)
     frames = pixels.reshape(-1, SENSOR_HEIGHT, SENSOR_WIDTH)
 
-    thermogram_animation = animate_thermograms(frames, timestamps)
-    save_animation(thermogram_animation)
+    #thermogram_animation = animate_thermograms(frames, timestamps)
+    #save_animation(thermogram_animation)
     save_npz(timestamps, pixels, out_path)
-    save_csv(timestamps, pixels, out_path_csv)
+    #save_csv(timestamps, pixels, out_path_csv)
 
 
     print(f"Decoded {len(timestamps)} frames -> {out_path}")
