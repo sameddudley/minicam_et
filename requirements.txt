@@ -1,0 +1,21 @@
+//Electronic hardware
+ESP32-WROOM-DEVKIT V1
+MLX90640 Thermal camera sensor
+Real time clock (RTC) Module
+MicroSD Card module
+LM2596 DC-DC Buck converter
+Battery
+
+//Software
+Arduino IDE
+
+//Libraries to install
+RTCLib by Adafruit
+
+
+//Other files in sketch directory
+MLX90640_API.cpp
+MLX90640_API.h
+MLX90640_I2C_Driver.cpp
+MLX90640_I2C_Driver.h
+User_Setup.h
